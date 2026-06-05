@@ -2,3 +2,5 @@ venv
 __pycache__
 chroma_store
 .env
+node_modules
+.DS_Store

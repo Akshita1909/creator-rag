@@ -101,3 +101,6 @@ async def get_session(session_id: str):
 @app.get("/health")
 async def health():
     return {"status": "ok"}
+@app.get("/")
+async def root():
+    return {"message": "Creator RAG API is running"}

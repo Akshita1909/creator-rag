@@ -5,14 +5,17 @@ from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 from langgraph.graph import StateGraph, END
 from langgraph.graph.message import add_messages
 import chromadb
-from sentence_transformers import SentenceTransformer
+from chromadb.utils import embedding_functions
 from dotenv import load_dotenv
 
 load_dotenv()
 
-chroma_client = chromadb.PersistentClient(path="./chroma_store")
-collection = chroma_client.get_or_create_collection("videos")
-embedder = SentenceTransformer("all-MiniLM-L6-v2")
+chroma_client = chromadb.EphemeralClient()
+embedder = embedding_functions.DefaultEmbeddingFunction()
+collection = chroma_client.get_or_create_collection(
+    "videos",
+    embedding_function=embedder
+)
 
 llm = ChatGroq(
     model="llama-3.3-70b-versatile",
@@ -30,10 +33,9 @@ class AgentState(TypedDict):
 
 def retrieve_node(state: AgentState) -> AgentState:
     last_message = state["messages"][-1].content
-    query_embedding = embedder.encode([last_message]).tolist()[0]
 
     results = collection.query(
-        query_embeddings=[query_embedding],
+        query_texts=[last_message],
         n_results=6,
         include=["documents", "metadatas", "distances"]
     )

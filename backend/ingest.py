@@ -2,16 +2,17 @@ import os, re, json, httpx
 from youtube_transcript_api import YouTubeTranscriptApi
 from yt_dlp import YoutubeDL
 import chromadb
-from chromadb.config import Settings
-from sentence_transformers import SentenceTransformer
+from chromadb.utils import embedding_functions
 from dotenv import load_dotenv
 
 load_dotenv()
 
-chroma_client = chromadb.PersistentClient(path="./chroma_store")
-collection = chroma_client.get_or_create_collection("videos")
-
-embedder = SentenceTransformer("all-MiniLM-L6-v2")
+chroma_client = chromadb.EphemeralClient()
+embedder = embedding_functions.DefaultEmbeddingFunction()
+collection = chroma_client.get_or_create_collection(
+    "videos",
+    embedding_function=embedder
+)
 
 
 def extract_youtube_id(url: str) -> str:
@@ -90,7 +91,7 @@ def get_instagram_transcript(url: str) -> str:
         return "[No transcript available for this Instagram Reel]"
 
 
-def chunk_text(text: str, chunk_size: int = 300, overlap: int = 50) -> list[str]:
+def chunk_text(text: str, chunk_size: int = 300, overlap: int = 50) -> list:
     words = text.split()
     chunks = []
     for i in range(0, len(words), chunk_size - overlap):
@@ -102,13 +103,9 @@ def chunk_text(text: str, chunk_size: int = 300, overlap: int = 50) -> list[str]
 
 def compute_engagement_rate(meta: dict) -> float:
     views = meta.get("views", 0)
-    likes = meta.get("likes", 0)
-    comments = meta.get("comments", 0)
     if views == 0:
-        # Instagram doesn't expose view count via scraping
-        # Return raw likes+comments as engagement score instead
-        return round(likes + comments, 4)
-    return round(((likes + comments) / views) * 100, 4)
+        return 0.0
+    return round(((meta.get("likes", 0) + meta.get("comments", 0)) / views) * 100, 4)
 
 
 def ingest_video(url: str, video_id: str) -> dict:
@@ -128,7 +125,6 @@ def ingest_video(url: str, video_id: str) -> dict:
 
     if transcript:
         chunks = chunk_text(transcript)
-        embeddings = embedder.encode(chunks).tolist()
 
         try:
             existing = collection.get(where={"video_id": video_id})
@@ -140,7 +136,6 @@ def ingest_video(url: str, video_id: str) -> dict:
         ids = [f"{video_id}_chunk_{i}" for i in range(len(chunks))]
         collection.add(
             documents=chunks,
-            embeddings=embeddings,
             ids=ids,
             metadatas=[{"video_id": video_id, **{k: str(v) for k, v in metadata.items()}} for _ in chunks]
         )

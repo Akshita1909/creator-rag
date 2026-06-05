@@ -1,27 +1,25 @@
-import os, re, json, httpx
+import os, re
 from youtube_transcript_api import YouTubeTranscriptApi
 from yt_dlp import YoutubeDL
 import chromadb
-from chromadb.config import Settings
-from sentence_transformers import SentenceTransformer
+from chromadb.utils import embedding_functions
 from dotenv import load_dotenv
 
 load_dotenv()
 
-chroma_client = chromadb.PersistentClient(path="./chroma_store")
-collection = chroma_client.get_or_create_collection("videos")
+chroma_client = chromadb.EphemeralClient()
+embedder = embedding_functions.DefaultEmbeddingFunction()
+collection = chroma_client.get_or_create_collection(
+    "videos",
+    embedding_function=embedder
+)
 
-embedder = SentenceTransformer("all-MiniLM-L6-v2")
-
-
-def extract_youtube_id(url: str) -> str:
+def extract_youtube_id(url):
     match = re.search(r"(?:v=|youtu\.be/)([a-zA-Z0-9_-]{11})", url)
     return match.group(1) if match else None
 
-
-def get_youtube_metadata(url: str) -> dict:
-    ydl_opts = {"quiet": True, "skip_download": True}
-    with YoutubeDL(ydl_opts) as ydl:
+def get_youtube_metadata(url):
+    with YoutubeDL({"quiet": True, "skip_download": True}) as ydl:
         info = ydl.extract_info(url, download=False)
         return {
             "title": info.get("title", ""),
@@ -36,19 +34,16 @@ def get_youtube_metadata(url: str) -> dict:
             "platform": "youtube",
         }
 
-
-def get_youtube_transcript(video_id: str) -> str:
+def get_youtube_transcript(video_id):
     try:
         transcript = YouTubeTranscriptApi.get_transcript(video_id)
         return " ".join([t["text"] for t in transcript])
     except Exception:
         return ""
 
-
-def get_instagram_metadata(url: str) -> dict:
-    ydl_opts = {"quiet": True, "skip_download": True}
+def get_instagram_metadata(url):
     try:
-        with YoutubeDL(ydl_opts) as ydl:
+        with YoutubeDL({"quiet": True, "skip_download": True}) as ydl:
             info = ydl.extract_info(url, download=False)
             return {
                 "title": info.get("title", info.get("description", "Instagram Reel")[:80]),
@@ -64,33 +59,23 @@ def get_instagram_metadata(url: str) -> dict:
             }
     except Exception as e:
         return {
-            "title": "Instagram Reel",
-            "creator": "Unknown",
+            "title": "Instagram Reel", "creator": "Unknown",
             "views": 0, "likes": 0, "comments": 0,
             "upload_date": "", "duration": 0,
             "hashtags": [], "follower_count": 0,
-            "platform": "instagram",
-            "error": str(e)
+            "platform": "instagram", "error": str(e)
         }
 
-
-def get_instagram_transcript(url: str) -> str:
-    ydl_opts = {
-        "quiet": True,
-        "skip_download": True,
-        "writeautomaticsub": True,
-        "subtitlesformat": "json3",
-    }
+def get_instagram_transcript(url):
     try:
-        with YoutubeDL(ydl_opts) as ydl:
+        with YoutubeDL({"quiet": True, "skip_download": True}) as ydl:
             info = ydl.extract_info(url, download=False)
             desc = info.get("description", "")
-            return desc if desc else "[No transcript available for this Instagram Reel]"
+            return desc if desc else "[No transcript available]"
     except Exception:
-        return "[No transcript available for this Instagram Reel]"
+        return "[No transcript available]"
 
-
-def chunk_text(text: str, chunk_size: int = 300, overlap: int = 50) -> list[str]:
+def chunk_text(text, chunk_size=300, overlap=50):
     words = text.split()
     chunks = []
     for i in range(0, len(words), chunk_size - overlap):
@@ -99,21 +84,14 @@ def chunk_text(text: str, chunk_size: int = 300, overlap: int = 50) -> list[str]
             chunks.append(chunk)
     return chunks
 
-
-def compute_engagement_rate(meta: dict) -> float:
+def compute_engagement_rate(meta):
     views = meta.get("views", 0)
-    likes = meta.get("likes", 0)
-    comments = meta.get("comments", 0)
     if views == 0:
-        # Instagram doesn't expose view count via scraping
-        # Return raw likes+comments as engagement score instead
-        return round(likes + comments, 4)
-    return round(((likes + comments) / views) * 100, 4)
+        return 0.0
+    return round(((meta.get("likes", 0) + meta.get("comments", 0)) / views) * 100, 4)
 
-
-def ingest_video(url: str, video_id: str) -> dict:
+def ingest_video(url, video_id):
     is_youtube = "youtube.com" in url or "youtu.be" in url
-
     if is_youtube:
         yt_id = extract_youtube_id(url)
         metadata = get_youtube_metadata(url)
@@ -128,19 +106,15 @@ def ingest_video(url: str, video_id: str) -> dict:
 
     if transcript:
         chunks = chunk_text(transcript)
-        embeddings = embedder.encode(chunks).tolist()
-
         try:
             existing = collection.get(where={"video_id": video_id})
             if existing["ids"]:
                 collection.delete(ids=existing["ids"])
         except Exception:
             pass
-
         ids = [f"{video_id}_chunk_{i}" for i in range(len(chunks))]
         collection.add(
             documents=chunks,
-            embeddings=embeddings,
             ids=ids,
             metadatas=[{"video_id": video_id, **{k: str(v) for k, v in metadata.items()}} for _ in chunks]
         )

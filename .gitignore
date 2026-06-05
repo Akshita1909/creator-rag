@@ -1,8 +1,4 @@
-venv/
-__pycache__/
-*.pyc
+venv
+__pycache__
+chroma_store
 .env
-chroma_store/
-node_modules/
-dist/
-.DS_Store
